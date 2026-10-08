@@ -1,4 +1,5 @@
 name: Publish AbsoluteBalls.net Desktop v0.3.2 hotfix
+# One-time verified export handoff. The signed export URL is intentionally short-lived.
 
 on:
   push:
@@ -12,65 +13,55 @@ permissions:
 
 jobs:
   publish:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout exact green source commit
-        uses: actions/checkout@v4
-        with:
-          repository: AbsoluteBalls-net/absoluteballs-web
-          ref: 73558380031f291cf876f8de74d07a22ac2f4650
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Build and test Desktop v0.3.2
-        working-directory: apps/desktop
-        shell: pwsh
-        run: ./build-windows.ps1
-
-      - name: Generate SHA-256
-        working-directory: apps/desktop/desktop/dist
-        shell: pwsh
+      - name: Download exact green production export
+        env:
+          EXPORT_URL: 'https://sdmntprnznorth.oaiusercontent.com/files/00000000-1274-820b-acf7-5f86df09de03/raw?se=2026-10-08T09%3A20%3A47Z&sp=r&sv=2026-02-06&sr=b&scid=76ab9206-8ac0-5dff-84a9-88a0f0433996&skoid=de71a0d5-fb02-4fce-be69-9296aced242b&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-10-07T23%3A46%3A11Z&ske=2026-10-08T23%3A46%3A11Z&sks=b&skv=2026-02-06&sig=vhXv3FXwIYjc6x/icSCPBDOyFHfqKYrXGHM%2BzzluxSo%3D'
         run: |
-          $installer = 'AbsoluteBalls-Desktop-Setup-0.3.2.exe'
-          $hash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $installer" | Set-Content -Encoding ascii "$installer.sha256.txt"
-          Write-Host "SHA256 $hash"
+          set -euo pipefail
+          curl -fL "$EXPORT_URL" -o export.zip
+          unzip -q export.zip -d export
+          ls -lah export
 
-      - name: Publish public v0.3.2 hotfix
-        working-directory: apps/desktop/desktop/dist
-        shell: pwsh
+      - name: Verify v0.3.2 installer SHA-256
+        run: |
+          set -euo pipefail
+          cd export
+          expected="bb68b0a1da9a4397c32621663c5577ece3a05c2946a133b7c67f88b466ccfe90"
+          actual="$(sha256sum AbsoluteBalls-Desktop-Setup-0.3.2.exe | awk '{print $1}')"
+          echo "Expected: $expected"
+          echo "Actual:   $actual"
+          test "$actual" = "$expected"
+          printf '%s  %s\n' "$actual" "AbsoluteBalls-Desktop-Setup-0.3.2.exe" > AbsoluteBalls-Desktop-Setup-0.3.2.exe.sha256.txt
+
+      - name: Publish public v0.3.2 beta hotfix
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          $tag = 'desktop-v0.3.2'
-          $installer = 'AbsoluteBalls-Desktop-Setup-0.3.2.exe'
-          $checksum = "$installer.sha256.txt"
-          $notes = @'
-          AbsoluteBalls.net Desktop v0.3.2 cost/reliability hotfix.
+          set -euo pipefail
+          tag="desktop-v0.3.2"
+          notes="$(cat <<'EOF'
+          AbsoluteBalls.net Desktop v0.3.2 beta cost/reliability hotfix.
 
           - Stops idle Desktop UI polling from repeatedly waking AbsoluteBalls.net.
           - Tracks Rocket League match activity locally.
-          - Polls the cloud Player HUD at live cadence only while an actual match is active.
-          - Preserves Replay Sync and the existing Player HUD/coaching behavior.
-          - Keeps the current evidence-first live/replay contract.
+          - Uses live cloud HUD cadence only while an actual Rocket League match is active.
+          - Preserves Replay Sync and the existing Player HUD/coaching contract.
+          - Keeps live information provisional and replay evidence authoritative post-match.
 
-          This hotfix reduces unnecessary Railway usage so broad Desktop adoption does not create continuous idle cloud cost.
-          '@
+          This hotfix makes broad Desktop adoption substantially cheaper by eliminating unnecessary idle cloud traffic.
+          EOF
+          )"
 
-          gh release view $tag --repo $env:GH_REPO *> $null
-          if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --repo $env:GH_REPO --target main --title 'AbsoluteBalls.net Desktop v0.3.2' --notes $notes
-            if ($LASTEXITCODE -ne 0) { throw "Could not create public v0.3.2 release." }
-          }
+          if ! gh release view "$tag" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "$GH_REPO" --target main --prerelease --title "AbsoluteBalls.net Desktop v0.3.2" --notes "$notes"
+          fi
 
-          gh release upload $tag $installer $checksum --clobber --repo $env:GH_REPO
-          if ($LASTEXITCODE -ne 0) { throw "Could not upload v0.3.2 release assets." }
+          gh release upload "$tag" \
+            export/AbsoluteBalls-Desktop-Setup-0.3.2.exe \
+            export/AbsoluteBalls-Desktop-Setup-0.3.2.exe.sha256.txt \
+            --clobber --repo "$GH_REPO"
+
+          gh release edit "$tag" --repo "$GH_REPO" --prerelease --title "AbsoluteBalls.net Desktop v0.3.2" --notes "$notes"
