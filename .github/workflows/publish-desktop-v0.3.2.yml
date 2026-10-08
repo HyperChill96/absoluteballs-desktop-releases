@@ -1,0 +1,76 @@
+name: Publish AbsoluteBalls.net Desktop v0.3.2 hotfix
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/publish-desktop-v0.3.2.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout exact green source commit
+        uses: actions/checkout@v4
+        with:
+          repository: AbsoluteBalls-net/absoluteballs-web
+          ref: 73558380031f291cf876f8de74d07a22ac2f4650
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Build and test Desktop v0.3.2
+        working-directory: apps/desktop
+        shell: pwsh
+        run: ./build-windows.ps1
+
+      - name: Generate SHA-256
+        working-directory: apps/desktop/desktop/dist
+        shell: pwsh
+        run: |
+          $installer = 'AbsoluteBalls-Desktop-Setup-0.3.2.exe'
+          $hash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $installer" | Set-Content -Encoding ascii "$installer.sha256.txt"
+          Write-Host "SHA256 $hash"
+
+      - name: Publish public v0.3.2 hotfix
+        working-directory: apps/desktop/desktop/dist
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $tag = 'desktop-v0.3.2'
+          $installer = 'AbsoluteBalls-Desktop-Setup-0.3.2.exe'
+          $checksum = "$installer.sha256.txt"
+          $notes = @'
+          AbsoluteBalls.net Desktop v0.3.2 cost/reliability hotfix.
+
+          - Stops idle Desktop UI polling from repeatedly waking AbsoluteBalls.net.
+          - Tracks Rocket League match activity locally.
+          - Polls the cloud Player HUD at live cadence only while an actual match is active.
+          - Preserves Replay Sync and the existing Player HUD/coaching behavior.
+          - Keeps the current evidence-first live/replay contract.
+
+          This hotfix reduces unnecessary Railway usage so broad Desktop adoption does not create continuous idle cloud cost.
+          '@
+
+          gh release view $tag --repo $env:GH_REPO *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --repo $env:GH_REPO --target main --title 'AbsoluteBalls.net Desktop v0.3.2' --notes $notes
+            if ($LASTEXITCODE -ne 0) { throw "Could not create public v0.3.2 release." }
+          }
+
+          gh release upload $tag $installer $checksum --clobber --repo $env:GH_REPO
+          if ($LASTEXITCODE -ne 0) { throw "Could not upload v0.3.2 release assets." }
